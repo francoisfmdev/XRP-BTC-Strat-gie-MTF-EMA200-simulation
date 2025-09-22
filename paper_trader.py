@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Paper-trader MTF EMA200
+Paper-trader MTF EMA200 (Kraken compatible)
 - Timeframe base = 5m
-- Filtre MTF : LONG si close > EMA200 sur M/D/4H/1H, SHORT si close < EMA200
+- Filtre MTF : LONG si close > EMA200 sur 1h/4h/1d/1w, SHORT si close < EMA200
 - Entrée : close vs EMA200 base (+ breakout optionnel)
 - Sortie : SL/TP ou si le biais MTF se casse
 - Résultats persistés : trades.csv, equity.csv, state.json
@@ -13,22 +13,24 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Dict
+import ccxt
+import datetime as dt
 
 PARAMS = {
     "exchange": "kraken",
-    "symbol": "XRP/USDT",
+    "symbol": "BTC/USDT",   # XRP/USDT peut aussi marcher, BTC/USDT est sûr
 
     # Timeframes
     "tf_base": "5m",
     "tf_1h": "1h",
     "tf_4h": "4h",
     "tf_1d": "1d",
-    "tf_1m": "1w",
+    "tf_1m": "1w",  # Kraken ne supporte pas '1M', on remplace par '1w'
 
-    # Historique initial pour EMA200
+    # Historique initial
     "since": "2024-01-01T00:00:00Z",
-    "ccxt_limit": 1000,
-    "rate_sleep_sec": 0.8,
+    "ccxt_limit": 500,
+    "rate_sleep_sec": 1.2,
 
     # Indicateurs
     "ema_period": 200,
@@ -89,36 +91,82 @@ def save_state(p: Dict, state: Dict):
     with open(p["state_path"], "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
-def _ccxt_fetch(ex, symbol, tf, since_ms, limit, sleep_s):
+# ========= Gestion des timeframes =========
+
+def tf_to_minutes(tf: str) -> int:
+    m = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,
+         "1h":60,"2h":120,"4h":240,"6h":360,"8h":480,"12h":720,
+         "1d":1440,"1w":10080}
+    return m.get(tf, 1440)  # fallback jour
+
+def bars_needed(tf: str, p: dict, is_base: bool) -> int:
+    warm = 50
+    if is_base:
+        return p["ema_period"] + p.get("breakout_lookback", 0) + warm
+    return p["ema_period"] + warm
+
+def since_for(tf: str, p: dict, is_base: bool) -> int:
+    minutes = tf_to_minutes(tf) * bars_needed(tf, p, is_base)
+    start = pd.Timestamp.utcnow() - pd.Timedelta(minutes=minutes)
+    return int(start.timestamp() * 1000)
+
+def _ccxt_fetch(ex, symbol, tf, since_ms, limit, sleep_s, max_retries=6):
     rows, fetch_since = [], since_ms
     while True:
-        ohlcv = ex.fetch_ohlcv(symbol, tf, since=fetch_since, limit=limit)
-        if not ohlcv: break
+        for attempt in range(max_retries):
+            try:
+                ohlcv = ex.fetch_ohlcv(symbol, tf, since=fetch_since, limit=limit)
+                break
+            except (ccxt.DDoSProtection, ccxt.RateLimitExceeded, ccxt.NetworkError) as e:
+                wait = min(2 ** attempt, 20)
+                print(f"[RATE] {e.__class__.__name__} on {tf}, retry in {wait}s...")
+                time.sleep(wait)
+        else:
+            raise
+        if not ohlcv:
+            break
         rows.extend(ohlcv)
         last_ts = ohlcv[-1][0]
         nxt = last_ts + 1
-        if fetch_since and nxt <= fetch_since: break
+        if fetch_since and nxt <= fetch_since:
+            break
         fetch_since = nxt
         time.sleep(sleep_s)
-        if len(rows) > 10000: break
+        if len(rows) > 10000:
+            break
     cols = ["timestamp", "open", "high", "low", "close", "volume"]
     df = pd.DataFrame(rows, columns=["ts", *cols[1:]])
+    if df.empty:
+        return pd.DataFrame(columns=cols).set_index(pd.Index([], name="timestamp"))
     df["timestamp"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-    df = df.drop(columns=["ts"]).set_index("timestamp").sort_index()
+    df = df.drop(columns=["ts"]).drop_duplicates("timestamp").sort_values("timestamp").set_index("timestamp")
     return df
 
-def load_all_timeframes(p: Dict):
-    import ccxt
-    ex = getattr(ccxt, p["exchange"])({"enableRateLimit": True})
-    to_ms = ex.parse8601
-    since_ms = to_ms(p["since"])
-    return (
-        _ccxt_fetch(ex, p["symbol"], p["tf_base"], since_ms, p["ccxt_limit"], p["rate_sleep_sec"]),
-        _ccxt_fetch(ex, p["symbol"], p["tf_1h"], since_ms, p["ccxt_limit"], p["rate_sleep_sec"]),
-        _ccxt_fetch(ex, p["symbol"], p["tf_4h"], since_ms, p["ccxt_limit"], p["rate_sleep_sec"]),
-        _ccxt_fetch(ex, p["symbol"], p["tf_1d"], since_ms, p["ccxt_limit"], p["rate_sleep_sec"]),
-        _ccxt_fetch(ex, p["symbol"], p["tf_1m"], since_ms, p["ccxt_limit"], p["rate_sleep_sec"]),
-    )
+def load_all_timeframes(p: dict):
+    ex = getattr(ccxt, p["exchange"])({"enableRateLimit": True, "timeout": 20000})
+    tf_m = p.get("tf_1m", "1w")
+    if tf_m.lower() == "1m":  # kraken n’a pas de monthly natif
+        tf_m = "1w"
+
+    s_base = since_for(p["tf_base"], p, True)
+    s_1h   = since_for(p["tf_1h"],   p, False)
+    s_4h   = since_for(p["tf_4h"],   p, False)
+    s_1d   = since_for(p["tf_1d"],   p, False)
+    s_1m   = since_for(tf_m,         p, False)
+
+    base = _ccxt_fetch(ex, p["symbol"], p["tf_base"], s_base, p["ccxt_limit"], p["rate_sleep_sec"])
+    time.sleep(1.5)
+    tf1h = _ccxt_fetch(ex, p["symbol"], p["tf_1h"], s_1h, p["ccxt_limit"], p["rate_sleep_sec"])
+    time.sleep(1.5)
+    tf4h = _ccxt_fetch(ex, p["symbol"], p["tf_4h"], s_4h, p["ccxt_limit"], p["rate_sleep_sec"])
+    time.sleep(1.5)
+    tf1d = _ccxt_fetch(ex, p["symbol"], p["tf_1d"], s_1d, p["ccxt_limit"], p["rate_sleep_sec"])
+    time.sleep(1.5)
+    tf1m = _ccxt_fetch(ex, p["symbol"], tf_m,       s_1m, p["ccxt_limit"], p["rate_sleep_sec"])
+
+    return base, tf1h, tf4h, tf1d, tf1m
+
+# ========= Signaux =========
 
 def align_htf_on_base(df_base, df_htf, ema_col):
     keep = df_htf[["close", ema_col]].rename(columns={"close": "htf_close"})
@@ -150,12 +198,15 @@ def append_csv(path, header, row):
     else:
         df.to_csv(path, header=header, index=False)
 
+# ========= Run principal =========
+
 def run_once(p: Dict):
     state = load_state(p)
     base, tf1h, tf4h, tf1d, tf1m = load_all_timeframes(p)
     sig, mtf_long, mtf_short = compute_signals_mtf(base, tf1h, tf4h, tf1d, tf1m, p)
-    if len(base) < 2: return
-    ts = base.index[-2]  # dernière bougie close
+    if len(base) < 2:
+        return
+    ts = base.index[-2]
     if state.get("last_bar_ts") == ts.isoformat():
         return
     c, o, h, l = base["close"].iloc[-2], base["open"].iloc[-2], base["high"].iloc[-2], base["low"].iloc[-2]
