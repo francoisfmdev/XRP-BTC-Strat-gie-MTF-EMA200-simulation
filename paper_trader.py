@@ -23,7 +23,7 @@ PARAMS = {
     "tf_1h": "1h",
     "tf_4h": "4h",
     "tf_1d": "1d",
-    "tf_1m": "1M",
+    "tf_1m": "1w",
 
     # Historique initial pour EMA200
     "since": "2024-01-01T00:00:00Z",
