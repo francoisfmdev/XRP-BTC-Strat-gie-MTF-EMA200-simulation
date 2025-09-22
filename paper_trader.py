@@ -15,7 +15,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict
 
 PARAMS = {
-    "exchange": "binance",
+    "exchange": "kraken",
     "symbol": "XRP/USDT",
 
     # Timeframes
