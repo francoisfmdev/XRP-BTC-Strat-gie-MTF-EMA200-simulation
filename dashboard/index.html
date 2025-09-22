@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Dashboard — Paper-trader MTF EMA200</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{font-family:sans-serif;margin:20px}
+    .wrap{max-width:1000px;margin:auto}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #ccc;padding:6px;text-align:right}
+    th:first-child,td:first-child{text-align:left}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Paper-trader MTF EMA200 (5m)</h1>
+  <h2>Equity</h2>
+  <canvas id="equity"></canvas>
+  <h2>Derniers trades</h2>
+  <table id="trades"><thead><tr>
+    <th>Exit time</th><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>PNL</th><th>Reason</th>
+  </tr></thead><tbody></tbody></table>
+</div>
+<script>
+async function fetchCSV(path){
+  const res=await fetch(path,{cache:'no-store'});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return await res.text();
+}
+function parseCSV(txt){
+  const [head,...rows]=txt.trim().split(/\\n+/);
+  const cols=head.split(',');
+  return rows.map(r=>{const cells=r.split(',');const o={};cols.forEach((c,i)=>o[c]=cells[i]);return o});
+}
+(async()=>{
+  try{
+    const e=await fetchCSV('../out/equity.csv');
+    const ed=parseCSV(e);
+    const labels=ed.map(x=>x.timestamp);
+    const values=ed.map(x=>+x.equity);
+    new Chart(document.getElementById('equity'),{
+      type:'line',
+      data:{labels,datasets:[{label:'Equity',data:values,tension:0.2}]}
+    });
+  }catch(err){console.warn(err);}
+  try{
+    const t=await fetchCSV('../out/trades.csv');
+    const td=parseCSV(t).slice(-20).reverse();
+    const body=document.querySelector('#trades tbody');
+    td.forEach(tr=>{
+      const trEl=document.createElement('tr');
+      [tr.exit_time,tr.side,tr.entry_price,tr.exit_price,tr.qty,tr.pnl,tr.reason]
+        .forEach(v=>{const td=document.createElement('td');td.textContent=v;trEl.appendChild(td);});
+      body.appendChild(trEl);
+    });
+  }catch(err){console.warn(err);}
+})();
+</script>
+</body>
+</html>
