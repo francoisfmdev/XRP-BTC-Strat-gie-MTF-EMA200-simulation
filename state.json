@@ -1,5 +1,11 @@
 {
   "capital": 202.48415331180126,
-  "open_position": null,
-  "last_bar_ts": "2025-10-03T02:35:00+00:00"
+  "open_position": {
+    "side": "long",
+    "entry_time": "2025-10-03T03:00:00+00:00",
+    "entry_price": 120343.0,
+    "qty": 0.0006730234523380712,
+    "bar_index": 258
+  },
+  "last_bar_ts": "2025-10-03T03:00:00+00:00"
 }
