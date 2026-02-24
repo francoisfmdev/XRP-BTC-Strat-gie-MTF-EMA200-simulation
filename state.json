@@ -1,11 +1,5 @@
 {
-  "capital": 193.7903761278075,
-  "open_position": {
-    "side": "short",
-    "entry_time": "2026-02-23T23:00:00+00:00",
-    "entry_price": 64737.6,
-    "qty": 0.0011973899318344053,
-    "bar_index": 258
-  },
-  "last_bar_ts": "2026-02-24T01:00:00+00:00"
+  "capital": 194.3488802696023,
+  "open_position": null,
+  "last_bar_ts": "2026-02-24T01:40:00+00:00"
 }
